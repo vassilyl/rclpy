@@ -91,11 +91,13 @@ class TestAsyncExecutor(unittest.TestCase):
                 tmr = self.node.create_timer(0.01, timer_callback)
                 executor.add_node(self.node)
                 
-                # Wait for callback to be called
-                for _ in range(50):
-                    await anyio.sleep(0.1)
-                    if callback_called:
-                        break
+                # Wait for callback to be called with timeout
+                timeout_sec = 5.0
+                check_interval = 0.05
+                elapsed = 0.0
+                while not callback_called and elapsed < timeout_sec:
+                    await anyio.sleep(check_interval)
+                    elapsed += check_interval
                 
                 self.node.destroy_timer(tmr)
 
@@ -115,11 +117,13 @@ class TestAsyncExecutor(unittest.TestCase):
                 tmr = self.node.create_timer(0.01, async_timer_callback)
                 executor.add_node(self.node)
                 
-                # Wait for callback to be called
-                for _ in range(50):
-                    await anyio.sleep(0.1)
-                    if callback_called:
-                        break
+                # Wait for callback to be called with timeout
+                timeout_sec = 5.0
+                check_interval = 0.05
+                elapsed = 0.0
+                while not callback_called and elapsed < timeout_sec:
+                    await anyio.sleep(check_interval)
+                    elapsed += check_interval
                 
                 self.node.destroy_timer(tmr)
 

@@ -69,14 +69,30 @@ from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.service import Service
 from rclpy.signals import SignalHandlerGuardCondition
 from rclpy.subscription import MessageInfo, Subscription
-from rclpy.timer import Timer
+from rclpy.timer import Timer, TimerInfo, TimerCallbackType
 from rclpy.utilities import get_default_context
 from rclpy.utilities import timeout_sec_to_nsec
 from rclpy.waitable import NumberOfEntities, Waitable
 
 if TYPE_CHECKING:
+    from typing import Type
     from rclpy.node import Node
     from rclpy.callback_groups import Entity
+
+
+def _check_timer_argument_type(
+    callback_func: TimerCallbackType, target_type: Type[TimerInfo]
+) -> Optional[str]:
+    """
+    Check if callback function signature contains a parameter of target type.
+    
+    Returns the name of the first parameter with the target type, or None.
+    """
+    sig = inspect.signature(callback_func)
+    for param in sig.parameters.values():
+        if param.annotation == target_type:
+            return param.name
+    return None
 
 
 class AsyncExecutor:
@@ -88,11 +104,17 @@ class AsyncExecutor:
     all callbacks to an anyio task group for execution.
     """
 
-    def __init__(self, *, context: Optional[Context] = None) -> None:
+    def __init__(
+        self,
+        *,
+        context: Optional[Context] = None,
+        wait_timeout_sec: float = 0.1
+    ) -> None:
         """
         Initialize the AsyncExecutor.
 
         :param context: The context to be associated with, or None for the default context.
+        :param wait_timeout_sec: Timeout for wait loop iterations in seconds (default: 0.1).
         """
         if anyio is None:
             raise ImportError(
@@ -126,6 +148,9 @@ class AsyncExecutor:
         # Thread for spinning
         self._spin_thread: Optional[threading.Thread] = None
         self._task_group: Optional[TaskGroup] = None
+        
+        # Wait timeout for spin loop
+        self._wait_timeout_sec = wait_timeout_sec
         
     @property
     def context(self) -> Context:
@@ -328,8 +353,8 @@ class AsyncExecutor:
             for waitable in waitables:
                 waitable.add_to_wait_set(wait_set)
             
-            # Wait with a small timeout to allow shutdown checks
-            wait_set.wait(timeout_sec_to_nsec(0.1))
+            # Wait with configured timeout to allow shutdown checks
+            wait_set.wait(timeout_sec_to_nsec(self._wait_timeout_sec))
             
             if self._is_shutdown or not self._context.ok():
                 return
@@ -401,30 +426,22 @@ class AsyncExecutor:
         try:
             with tmr.handle:
                 info = tmr.handle.call_timer_with_info()
-                from rclpy.timer import TimerInfo
                 timer_info = TimerInfo(
                     expected_call_time=info['expected_call_time'],
                     actual_call_time=info['actual_call_time'],
                     clock_type=tmr.clock.clock_type
                 )
                 
+                # Check if callback expects TimerInfo parameter
+                arg_name = None
+                if tmr.callback:
+                    arg_name = _check_timer_argument_type(tmr.callback, TimerInfo)
+                
                 async def _execute() -> None:
                     try:
                         if tmr.callback:
-                            # Check if callback expects TimerInfo
-                            sig = inspect.signature(tmr.callback)
-                            has_timer_info = any(
-                                p.annotation == TimerInfo for p in sig.parameters.values()
-                            )
-                            
-                            if has_timer_info:
-                                # Find the parameter name
-                                for param in sig.parameters.values():
-                                    if param.annotation == TimerInfo:
-                                        await await_or_execute(
-                                            tmr.callback, **{param.name: timer_info}
-                                        )
-                                        break
+                            if arg_name is not None:
+                                await await_or_execute(tmr.callback, **{arg_name: timer_info})
                             else:
                                 await await_or_execute(tmr.callback)
                     finally:
