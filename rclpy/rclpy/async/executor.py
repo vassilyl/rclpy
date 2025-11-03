@@ -409,23 +409,27 @@ class AsyncExecutor:
                 )
                 
                 async def _execute() -> None:
-                    if tmr.callback:
-                        # Check if callback expects TimerInfo
-                        sig = inspect.signature(tmr.callback)
-                        has_timer_info = any(
-                            p.annotation == TimerInfo for p in sig.parameters.values()
-                        )
-                        
-                        if has_timer_info:
-                            # Find the parameter name
-                            for param in sig.parameters.values():
-                                if param.annotation == TimerInfo:
-                                    await await_or_execute(
-                                        tmr.callback, **{param.name: timer_info}
-                                    )
-                                    break
-                        else:
-                            await await_or_execute(tmr.callback)
+                    try:
+                        if tmr.callback:
+                            # Check if callback expects TimerInfo
+                            sig = inspect.signature(tmr.callback)
+                            has_timer_info = any(
+                                p.annotation == TimerInfo for p in sig.parameters.values()
+                            )
+                            
+                            if has_timer_info:
+                                # Find the parameter name
+                                for param in sig.parameters.values():
+                                    if param.annotation == TimerInfo:
+                                        await await_or_execute(
+                                            tmr.callback, **{param.name: timer_info}
+                                        )
+                                        break
+                            else:
+                                await await_or_execute(tmr.callback)
+                    finally:
+                        if tmr.callback_group:
+                            tmr.callback_group.ending_execution(tmr)
                 
                 if tmr.callback_group:
                     tmr.callback_group.beginning_execution(tmr)
@@ -451,7 +455,11 @@ class AsyncExecutor:
                     msg_tuple = msg_info
                 
                 async def _execute() -> None:
-                    await await_or_execute(sub.callback, *msg_tuple)
+                    try:
+                        await await_or_execute(sub.callback, *msg_tuple)
+                    finally:
+                        if sub.callback_group:
+                            sub.callback_group.ending_execution(sub)
                 
                 if sub.callback_group:
                     sub.callback_group.beginning_execution(sub)
@@ -468,8 +476,12 @@ class AsyncExecutor:
         gc._executor_triggered = False
         
         async def _execute() -> None:
-            if gc.callback:
-                await await_or_execute(gc.callback)
+            try:
+                if gc.callback:
+                    await await_or_execute(gc.callback)
+            finally:
+                if gc.callback_group:
+                    gc.callback_group.ending_execution(gc)
         
         if gc.callback_group:
             gc.callback_group.beginning_execution(gc)
@@ -488,17 +500,21 @@ class AsyncExecutor:
                 )
             
             async def _execute() -> None:
-                header, response = header_and_response
-                if header is None:
-                    return
                 try:
-                    sequence = header.request_id.sequence_number
-                    future = client.get_pending_request(sequence)
-                except KeyError:
-                    # The request was cancelled
-                    pass
-                else:
-                    future.set_result(response)
+                    header, response = header_and_response
+                    if header is None:
+                        return
+                    try:
+                        sequence = header.request_id.sequence_number
+                        future = client.get_pending_request(sequence)
+                    except KeyError:
+                        # The request was cancelled
+                        pass
+                    else:
+                        future.set_result(response)
+                finally:
+                    if client.callback_group:
+                        client.callback_group.ending_execution(client)
             
             if client.callback_group:
                 client.callback_group.beginning_execution(client)
@@ -519,14 +535,18 @@ class AsyncExecutor:
                 )
             
             async def _execute() -> None:
-                request, header = request_and_header
-                if header is None:
-                    return
-                
-                response = await await_or_execute(
-                    srv.callback, request, srv.srv_type.Response()
-                )
-                srv.send_response(response, header)
+                try:
+                    request, header = request_and_header
+                    if header is None:
+                        return
+                    
+                    response = await await_or_execute(
+                        srv.callback, request, srv.srv_type.Response()
+                    )
+                    srv.send_response(response, header)
+                finally:
+                    if srv.callback_group:
+                        srv.callback_group.ending_execution(srv)
             
             if srv.callback_group:
                 srv.callback_group.beginning_execution(srv)
@@ -543,7 +563,11 @@ class AsyncExecutor:
         data = waitable.take_data()
         
         async def _execute() -> None:
-            await waitable.execute(data)
+            try:
+                await waitable.execute(data)
+            finally:
+                if waitable.callback_group:
+                    waitable.callback_group.ending_execution(waitable)
         
         if waitable.callback_group:
             waitable.callback_group.beginning_execution(waitable)

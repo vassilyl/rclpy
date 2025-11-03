@@ -29,6 +29,6 @@ Note: 'async' is a reserved keyword in Python. To import from this module:
 
 # Import at module level for proper initialization
 # This file can be imported using importlib or __import__
-from rclpy.async.executor import AsyncExecutor  # noqa: F401
+from .executor import AsyncExecutor  # noqa: F401
 
 __all__ = ['AsyncExecutor']
